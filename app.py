@@ -1,7 +1,23 @@
 
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, redirect, url_for, session, g
+import sqlite3
+import os
 
 app = Flask(__name__)
+app.secret_key = 'your_secret_key'  # Change this in production
+DATABASE = os.path.join(os.path.dirname(__file__), 'users.db')
+
+def get_db():
+    db = getattr(g, '_database', None)
+    if db is None:
+        db = g._database = sqlite3.connect(DATABASE)
+    return db
+
+@app.teardown_appcontext
+def close_connection(exception):
+    db = getattr(g, '_database', None)
+    if db is not None:
+        db.close()
 
 @app.route('/')
 def home():
@@ -31,6 +47,47 @@ def service():
             result = f'Error: {e}'
     return render_template('service.html', result=result)
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0',debug=True)
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    error = None
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        db = get_db()
+        cur = db.cursor()
+        cur.execute('SELECT * FROM users WHERE username = ?', (username,))
+        if cur.fetchone():
+            error = 'Username already exists.'
+        else:
+            cur.execute('INSERT INTO users (username, password) VALUES (?, ?)', (username, password))
+            db.commit()
+            return redirect(url_for('login'))
+    return render_template('register.html', error=error)
 
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    error = None
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        db = get_db()
+        cur = db.cursor()
+        cur.execute('SELECT * FROM users WHERE username = ? AND password = ?', (username, password))
+        user = cur.fetchone()
+        if user:
+            session['username'] = username
+            return redirect(url_for('home'))
+        else:
+            error = 'Invalid credentials.'
+    return render_template('login.html', error=error)
+
+@app.route('/logout')
+def logout():
+    session.pop('username', None)
+    return redirect(url_for('home'))
+
+if __name__ == '__main__':
+    # Create users table if it doesn't exist
+    with sqlite3.connect(DATABASE) as db:
+        db.execute('CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, password TEXT)')
+    app.run(debug=True)
